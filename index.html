@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Precision Cutter — Freehand Region Extractor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --bg:        #0B0D10;
+    --panel:     #14171C;
+    --panel-2:   #191D23;
+    --line:      #262B33;
+    --text:      #E7EAEE;
+    --muted:     #8890A0;
+    --accent:    #00D68A;
+    --accent-dim:#00D68A33;
+    --warn:      #FFB020;
+    --danger:    #FF5C5C;
+    --mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:var(--sans);
+    overflow:hidden;
+  }
+  #app{ display:flex; flex-direction:column; height:100vh; }
+
+  header{
+    display:flex; align-items:center; gap:14px;
+    padding:14px 20px; border-bottom:1px solid var(--line);
+    background:var(--panel); flex-shrink:0;
+  }
+  header .mark{
+    width:30px; height:30px; border-radius:7px;
+    background:linear-gradient(135deg, var(--accent), #00A876);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-weight:700; color:#031B12; font-size:14px;
+  }
+  header .title{ display:flex; flex-direction:column; line-height:1.2; }
+  header .title .eyebrow{
+    font-family:var(--mono); font-size:10px; letter-spacing:.14em;
+    color:var(--accent); text-transform:uppercase;
+  }
+  header .title .name{ font-size:15px; font-weight:600; }
+  header .fileinfo{
+    margin-left:auto; font-family:var(--mono); font-size:11px; color:var(--muted);
+    text-align:right; line-height:1.4;
+  }
+
+  #body{ flex:1; display:flex; min-height:0; }
+
+  #toolbar{
+    width:250px; flex-shrink:0; background:var(--panel);
+    border-right:1px solid var(--line); padding:16px; overflow-y:auto;
+    display:flex; flex-direction:column; gap:18px;
+  }
+  .group{ display:flex; flex-direction:column; gap:8px; }
+  .group-label{
+    font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+    color:var(--muted); text-transform:uppercase; margin-bottom:2px;
+  }
+  .row{ display:flex; gap:8px; }
+  .row > *{ flex:1; }
+
+  button{
+    font-family:var(--sans); font-size:12.5px; font-weight:600;
+    color:var(--text); background:var(--panel-2); border:1px solid var(--line);
+    border-radius:6px; padding:9px 10px; cursor:pointer;
+    transition:background .12s, border-color .12s, opacity .12s;
+    display:flex; align-items:center; justify-content:center; gap:6px;
+  }
+  button:hover:not(:disabled){ background:#20252d; border-color:#333944; }
+  button:disabled{ opacity:.35; cursor:not-allowed; }
+  button.active{ background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
+  button.primary{ background:var(--accent); border-color:var(--accent); color:#031B12; }
+  button.primary:hover:not(:disabled){ background:#00c07d; }
+  button.ghost{ background:transparent; }
+  button.full{ width:100%; }
+  button.danger:hover:not(:disabled){ border-color:var(--danger); color:var(--danger); }
+
+  select, input[type=number]{
+    font-family:var(--mono); font-size:12px; color:var(--text);
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px;
+    padding:7px 8px; width:100%;
+  }
+  input[type=range]{ width:100%; accent-color:var(--accent); }
+  .hint{ font-size:11px; color:var(--muted); line-height:1.45; }
+  .kbd{
+    font-family:var(--mono); font-size:10px; background:#1e232b; border:1px solid var(--line);
+    border-radius:4px; padding:1px 5px; color:var(--muted);
+  }
+
+  #canvasWrap{
+    flex:1; position:relative; overflow:hidden;
+    background-image:
+      linear-gradient(45deg, #12151a 25%, transparent 25%),
+      linear-gradient(-45deg, #12151a 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #12151a 75%),
+      linear-gradient(-45deg, transparent 75%, #12151a 75%);
+    background-size: 22px 22px;
+    background-position: 0 0, 0 11px, 11px -11px, -11px 0px;
+    background-color: #0d0f12;
+  }
+  #stage{ position:absolute; inset:0; touch-action:none; cursor:crosshair; }
+  #stage.pan-mode{ cursor:grab; }
+  #stage.panning{ cursor:grabbing; }
+
+  #dropzone{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:10px; z-index:5; cursor:pointer;
+  }
+  #dropzone .box{
+    border:1.5px dashed #333a45; border-radius:14px; padding:48px 60px;
+    display:flex; flex-direction:column; align-items:center; gap:12px;
+    transition:border-color .15s, background .15s;
+  }
+  #dropzone.drag .box{ border-color:var(--accent); background:var(--accent-dim); }
+  #dropzone .icon{ font-size:30px; }
+  #dropzone .t1{ font-size:15px; font-weight:600; }
+  #dropzone .t2{ font-size:12px; color:var(--muted); max-width:320px; text-align:center; line-height:1.5; }
+  #fileInput{ display:none; }
+
+  #hud{
+    position:absolute; left:12px; bottom:12px; z-index:4;
+    font-family:var(--mono); font-size:11px; color:var(--muted);
+    background:#0000007a; backdrop-filter:blur(4px); border:1px solid var(--line);
+    border-radius:7px; padding:6px 10px; display:none; gap:14px; flex-wrap:wrap;
+  }
+  #hud b{ color:var(--text); font-weight:600; }
+  #hud span{ white-space:nowrap; }
+
+  #zoomHud{
+    position:absolute; right:12px; bottom:12px; z-index:4; display:none;
+    align-items:center; gap:6px; background:#0000007a; backdrop-filter:blur(4px);
+    border:1px solid var(--line); border-radius:7px; padding:4px;
+  }
+  #zoomHud button{ padding:6px 9px; }
+  #zoomHud .pct{ font-family:var(--mono); font-size:11px; width:52px; text-align:center; }
+
+  #resultPanel{
+    position:fixed; inset:0; background:#000000b3; backdrop-filter:blur(3px);
+    display:none; align-items:center; justify-content:center; z-index:50;
+  }
+  #resultCard{
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    width:min(520px, 92vw); max-height:88vh; overflow:auto;
+    display:flex; flex-direction:column;
+  }
+  #resultCard .hd{
+    padding:16px 18px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  #resultCard .hd .t{ font-weight:700; font-size:14px; }
+  #resultCard .hd button{ padding:5px 9px; }
+  #resultPreviewWrap{
+    padding:18px; display:flex; justify-content:center;
+    background-image:
+      linear-gradient(45deg, #1b1f26 25%, transparent 25%),
+      linear-gradient(-45deg, #1b1f26 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #1b1f26 75%),
+      linear-gradient(-45deg, transparent 75%, #1b1f26 75%);
+    background-size:18px 18px; background-position:0 0,0 9px,9px -9px,-9px 0;
+  }
+  #resultPreviewWrap img{ max-width:100%; max-height:44vh; border-radius:6px; box-shadow:0 6px 24px #00000066; }
+  #resultMeta{
+    padding:0 18px; font-family:var(--mono); font-size:11.5px; color:var(--muted);
+    display:flex; flex-direction:column; gap:4px;
+  }
+  #resultActions{ padding:18px; display:flex; gap:10px; }
+
+  @media (max-width: 760px){
+    #body{ flex-direction:column; }
+    #toolbar{ width:100%; flex-direction:row; flex-wrap:wrap; border-right:none; border-bottom:1px solid var(--line); max-height:38vh; }
+    .group{ min-width:150px; flex:1; }
+    header .fileinfo{ display:none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="mark">PC</div>
+    <div class="title">
+      <div class="eyebrow">Image / PDF Region Extractor</div>
+      <div class="name">Precision Cutter</div>
+    </div>
+    <div class="fileinfo" id="fileInfo">No file loaded</div>
+  </header>
+
+  <div id="body">
+    <div id="toolbar">
+
+      <div class="group">
+        <div class="group-label">Source</div>
+        <button class="full" id="btnUpload">⬆ Upload image / PDF</button>
+        <div class="row" id="pdfRow" style="display:none;">
+          <select id="pdfPage"></select>
+        </div>
+        <div id="pdfQualityGroup" style="display:none;">
+          <div class="hint" style="margin-bottom:4px;">PDF render quality — higher = sharper zoom, slower load</div>
+          <input type="range" id="pdfScale" min="1" max="6" step="0.5" value="3">
+          <div class="hint" id="pdfScaleLabel">Scale ×3 (~216 DPI)</div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-label">Tool</div>
+        <div class="row">
+          <button id="modeDraw" class="active">✏ Draw</button>
+          <button id="modePan">✋ Pan</button>
+        </div>
+        <div class="hint">Hold <span class="kbd">Space</span> to pan temporarily while drawing.</div>
+      </div>
+
+      <div class="group">
+        <div class="group-label">View</div>
+        <div class="row">
+          <button id="zoomOut">−</button>
+          <button id="zoomFit">Fit</button>
+          <button id="zoomIn">+</button>
+        </div>
+        <button class="full ghost" id="zoom100">Actual pixels (100%)</button>
+        <div class="hint">Scroll to zoom · drag to pan in Pan mode. Zoom is lossless — it re-reveals the source pixels, it never blurs them.</div>
+      </div>
+
+      <div class="group">
+        <div class="group-label">Selection</div>
+        <button class="full" id="btnClear" disabled>✕ Clear selection</button>
+        <select id="bgFill">
+          <option value="transparent">Outside fill: Transparent</option>
+          <option value="#ffffff">Outside fill: White</option>
+          <option value="#000000">Outside fill: Black</option>
+        </select>
+        <button class="full primary" id="btnCut" disabled>✂ Cut selection</button>
+        <div class="hint">Draw a freehand loop around the region, then cut. Export is a pixel-exact crop of the full-resolution source — no re-compression.</div>
+      </div>
+
+    </div>
+
+    <div id="canvasWrap">
+      <div id="dropzone">
+        <div class="box">
+          <div class="icon">🖼</div>
+          <div class="t1">Drop an image or PDF, or click to browse</div>
+          <div class="t2">JPG, PNG, WebP, or PDF. The full-resolution source is kept in memory the whole time — zooming in never degrades it.</div>
+        </div>
+      </div>
+      <canvas id="stage"></canvas>
+      <div id="hud">
+        <span>Zoom <b id="hudZoom">100%</b></span>
+        <span>Cursor <b id="hudCursor">—</b></span>
+        <span>Source <b id="hudSize">—</b></span>
+        <span>Points <b id="hudPoints">0</b></span>
+      </div>
+      <div id="zoomHud">
+        <button id="zoomOut2">−</button>
+        <div class="pct" id="zoomPct">100%</div>
+        <button id="zoomIn2">+</button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="fileInput" accept="image/*,application/pdf">
+
+  <div id="resultPanel">
+    <div id="resultCard">
+      <div class="hd">
+        <div class="t">Cut region</div>
+        <button id="resultClose">✕</button>
+      </div>
+      <div id="resultPreviewWrap"><img id="resultImg" alt="Cropped region"></div>
+      <div id="resultMeta">
+        <div id="resultDims">—</div>
+        <div id="resultBytes">—</div>
+      </div>
+      <div id="resultActions">
+        <button class="full ghost" id="resultDiscard">Discard</button>
+        <button class="full primary" id="resultDownload">⬇ Download PNG</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- state ----------
+  const sourceCanvas = document.createElement('canvas');
+  const sctx = sourceCanvas.getContext('2d');
+  let hasSource = false;
+
+  const stage = document.getElementById('stage');
+  const wrap  = document.getElementById('canvasWrap');
+  const ctx   = stage.getContext('2d');
+
+  let scale = 1, panX = 0, panY = 0;
+  const MIN_SCALE = 0.02, MAX_SCALE = 40;
+
+  let mode = 'draw'; // 'draw' | 'pan'
+  let spaceHeld = false;
+  let isDrawing = false;
+  let isPanning = false;
+  let panStart = null;
+  let currentStroke = [];
+  let polygon = [];
+
+  let pdfDoc = null, pdfScaleFactor = 3, currentPage = 1;
+
+  let renderQueued = false;
+  function scheduleRender(){
+    if(renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(()=>{ renderQueued = false; render(); });
+  }
+
+  // ---------- canvas sizing ----------
+  function fitStageToContainer(){
+    const rect = wrap.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    stage.style.width = rect.width + 'px';
+    stage.style.height = rect.height + 'px';
+    stage.width = Math.round(rect.width * dpr);
+    stage.height = Math.round(rect.height * dpr);
+    scheduleRender();
+  }
+  window.addEventListener('resize', fitStageToContainer);
+
+  function canvasPointFromEvent(e){
+    const rect = stage.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (stage.width / rect.width);
+    const cy = (e.clientY - rect.top) * (stage.height / rect.height);
+    return {x: cx, y: cy};
+  }
+  function screenToSource(p){
+    return { x: (p.x - panX) / scale, y: (p.y - panY) / scale };
+  }
+
+  // ---------- render ----------
+  function render(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,stage.width, stage.height);
+    if(!hasSource) return;
+
+    ctx.imageSmoothingEnabled = scale < 4;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.setTransform(scale,0,0,scale,panX,panY);
+    ctx.drawImage(sourceCanvas, 0, 0);
+
+    const pts = polygon.length ? polygon : currentStroke;
+    if(pts.length > 1){
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+      if(polygon.length) ctx.closePath();
+      ctx.lineWidth = 2/scale;
+      ctx.setLineDash([6/scale, 4/scale]);
+      ctx.strokeStyle = '#00D68A';
+      ctx.stroke();
+      if(polygon.length){
+        ctx.fillStyle = 'rgba(0,214,138,0.16)';
+        ctx.fill();
+      }
+      ctx.setLineDash([]);
+    }
+    ctx.setTransform(1,0,0,1,0,0);
+    updateZoomHud();
+  }
+
+  function updateZoomHud(){
+    const pct = Math.round(scale*100) + '%';
+    document.getElementById('hudZoom').textContent = pct;
+    document.getElementById('zoomPct').textContent = pct;
+    document.getElementById('hudSize').textContent = hasSource ? (sourceCanvas.width + '×' + sourceCanvas.height + ' px') : '—';
+    document.getElementById('hudPoints').textContent = (polygon.length || currentStroke.length);
+  }
+
+  // ---------- fit / zoom ----------
+  function fitView(){
+    if(!hasSource) return;
+    const pad = 40;
+    const availW = stage.width - pad*2, availH = stage.height - pad*2;
+    scale = Math.min(availW / sourceCanvas.width, availH / sourceCanvas.height);
+    scale = Math.max(MIN_SCALE, Math.min(scale, MAX_SCALE));
+    panX = (stage.width - sourceCanvas.width*scale) / 2;
+    panY = (stage.height - sourceCanvas.height*scale) / 2;
+    scheduleRender();
+  }
+
+  function zoomAt(px, py, factor){
+    const before = screenToSource({x:px,y:py});
+    scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale*factor));
+    panX = px - before.x*scale;
+    panY = py - before.y*scale;
+    scheduleRender();
+  }
+  function zoomCenter(factor){
+    zoomAt(stage.width/2, stage.height/2, factor);
+  }
+
+  // ---------- source loading ----------
+  function onSourceReady(){
+    hasSource = true;
+    document.getElementById('dropzone').style.display = 'none';
+    document.getElementById('hud').style.display = 'flex';
+    document.getElementById('zoomHud').style.display = 'flex';
+    polygon = []; currentStroke = [];
+    document.getElementById('btnCut').disabled = true;
+    document.getElementById('btnClear').disabled = true;
+    fitView();
+  }
+
+  function loadImageFile(file){
+    const img = new Image();
+    img.onload = function(){
+      sourceCanvas.width = img.naturalWidth;
+      sourceCanvas.height = img.naturalHeight;
+      sctx.clearRect(0,0,sourceCanvas.width, sourceCanvas.height);
+      sctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(img.src);
+      document.getElementById('pdfRow').style.display = 'none';
+      document.getElementById('pdfQualityGroup').style.display = 'none';
+      document.getElementById('fileInfo').textContent =
+        file.name + '  ·  ' + sourceCanvas.width + '×' + sourceCanvas.height + ' px';
+      onSourceReady();
+    };
+    img.onerror = function(){ alert('Could not read this image file.'); };
+    img.src = URL.createObjectURL(file);
+  }
+
+  async function loadPdfFile(file){
+    const buf = await file.arrayBuffer();
+    pdfDoc = await pdfjsLib.getDocument({data: buf}).promise;
+    const pageSelect = document.getElementById('pdfPage');
+    pageSelect.innerHTML = '';
+    for(let i=1;i<=pdfDoc.numPages;i++){
+      const opt = document.createElement('option');
+      opt.value = i; opt.textContent = 'Page ' + i + ' / ' + pdfDoc.numPages;
+      pageSelect.appendChild(opt);
+    }
+    document.getElementById('pdfRow').style.display = pdfDoc.numPages>1 ? 'flex' : 'none';
+    document.getElementById('pdfQualityGroup').style.display = 'block';
+    document.getElementById('fileInfo').textContent = file.name + '  ·  ' + pdfDoc.numPages + ' page(s)';
+    currentPage = 1;
+    await renderPdfPage(1);
+  }
+
+  async function renderPdfPage(num){
+    const page = await pdfDoc.getPage(num);
+    const viewport = page.getViewport({scale: pdfScaleFactor});
+    sourceCanvas.width = Math.round(viewport.width);
+    sourceCanvas.height = Math.round(viewport.height);
+    sctx.clearRect(0,0,sourceCanvas.width, sourceCanvas.height);
+    await page.render({canvasContext: sctx, viewport}).promise;
+    const fi = document.getElementById('fileInfo');
+    fi.textContent = fi.textContent.split('  ·  ')[0] + '  ·  ' + sourceCanvas.width + '×' + sourceCanvas.height + ' px';
+    onSourceReady();
+  }
+
+  function handleFile(file){
+    if(!file) return;
+    if(file.type === 'application/pdf' || /\.pdf$/i.test(file.name)){
+      loadPdfFile(file).catch(err=>{ console.error(err); alert('Could not read this PDF.'); });
+    } else if(file.type.startsWith('image/')){
+      loadImageFile(file);
+    } else {
+      alert('Please upload an image (JPG/PNG/WebP) or a PDF.');
+    }
+  }
+
+  // ---------- upload UI ----------
+  const fileInput = document.getElementById('fileInput');
+  document.getElementById('btnUpload').addEventListener('click', ()=>fileInput.click());
+  document.getElementById('dropzone').addEventListener('click', ()=>fileInput.click());
+  fileInput.addEventListener('change', e=>{ if(e.target.files[0]) handleFile(e.target.files[0]); });
+
+  ['dragover','dragenter'].forEach(ev=>{
+    wrap.addEventListener(ev, e=>{ e.preventDefault(); document.getElementById('dropzone').classList.add('drag'); });
+  });
+  ['dragleave','drop'].forEach(ev=>{
+    wrap.addEventListener(ev, e=>{ e.preventDefault(); document.getElementById('dropzone').classList.remove('drag'); });
+  });
+  wrap.addEventListener('drop', e=>{
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(f) handleFile(f);
+  });
+
+  document.getElementById('pdfPage').addEventListener('change', e=>{
+    currentPage = parseInt(e.target.value,10);
+    renderPdfPage(currentPage);
+  });
+  const pdfScaleSlider = document.getElementById('pdfScale');
+  pdfScaleSlider.addEventListener('input', e=>{
+    pdfScaleFactor = parseFloat(e.target.value);
+    document.getElementById('pdfScaleLabel').textContent =
+      'Scale ×' + pdfScaleFactor + ' (~' + Math.round(pdfScaleFactor*72) + ' DPI)';
+  });
+  pdfScaleSlider.addEventListener('change', ()=>{ if(pdfDoc) renderPdfPage(currentPage); });
+
+  // ---------- mode ----------
+  const btnDraw = document.getElementById('modeDraw');
+  const btnPan  = document.getElementById('modePan');
+  function setMode(m){
+    mode = m;
+    btnDraw.classList.toggle('active', m==='draw');
+    btnPan.classList.toggle('active', m==='pan');
+    stage.classList.toggle('pan-mode', m==='pan');
+  }
+  btnDraw.addEventListener('click', ()=>setMode('draw'));
+  btnPan.addEventListener('click', ()=>setMode('pan'));
+
+  window.addEventListener('keydown', e=>{
+    if(e.code === 'Space' && !spaceHeld){ spaceHeld = true; stage.classList.add('pan-mode'); }
+    if(e.key === 'Escape') clearSelection();
+    if(e.key === '+' || e.key === '=') zoomCenter(1.2);
+    if(e.key === '-' || e.key === '_') zoomCenter(1/1.2);
+    if(e.key.toLowerCase() === 'f') fitView();
+  });
+  window.addEventListener('keyup', e=>{
+    if(e.code === 'Space'){ spaceHeld = false; stage.classList.toggle('pan-mode', mode==='pan'); }
+  });
+
+  // ---------- pointer interaction ----------
+  const MIN_STROKE_DIST_SCREEN = 2.5; // px, in screen space, before adding a new point
+
+  function effectiveMode(){ return (spaceHeld || mode === 'pan') ? 'pan' : 'draw'; }
+
+  stage.addEventListener('pointerdown', e=>{
+    if(!hasSource) return;
+    stage.setPointerCapture(e.pointerId);
+    const p = canvasPointFromEvent(e);
+    if(effectiveMode() === 'pan'){
+      isPanning = true;
+      panStart = {x:p.x, y:p.y, panX, panY};
+      stage.classList.add('panning');
+    } else {
+      isDrawing = true;
+      polygon = [];
+      currentStroke = [screenToSource(p)];
+      document.getElementById('btnCut').disabled = true;
+      document.getElementById('btnClear').disabled = false;
+    }
+    scheduleRender();
+  });
+
+  stage.addEventListener('pointermove', e=>{
+    const p = canvasPointFromEvent(e);
+    if(hasSource){
+      const sp = screenToSource(p);
+      document.getElementById('hudCursor').textContent =
+        Math.round(sp.x) + ', ' + Math.round(sp.y) + ' px';
+    }
+    if(isPanning && panStart){
+      panX = panStart.panX + (p.x - panStart.x);
+      panY = panStart.panY + (p.y - panStart.y);
+      scheduleRender();
+    } else if(isDrawing){
+      const last = currentStroke[currentStroke.length-1];
+      const lastScreen = {x: last.x*scale+panX, y: last.y*scale+panY};
+      const dist = Math.hypot(p.x-lastScreen.x, p.y-lastScreen.y);
+      if(dist >= MIN_STROKE_DIST_SCREEN){
+        currentStroke.push(screenToSource(p));
+        scheduleRender();
+      }
+    }
+  });
+
+  function endPointer(e){
+    if(isPanning){ isPanning = false; panStart = null; stage.classList.remove('panning'); }
+    if(isDrawing){
+      isDrawing = false;
+      if(currentStroke.length >= 3){
+        polygon = currentStroke;
+        document.getElementById('btnCut').disabled = false;
+      } else {
+        polygon = [];
+        document.getElementById('btnClear').disabled = true;
+      }
+      currentStroke = [];
+      scheduleRender();
+    }
+  }
+  stage.addEventListener('pointerup', endPointer);
+  stage.addEventListener('pointercancel', endPointer);
+  stage.addEventListener('pointerleave', ()=>{ document.getElementById('hudCursor').textContent = '—'; });
+
+  stage.addEventListener('wheel', e=>{
+    if(!hasSource) return;
+    e.preventDefault();
+    const p = canvasPointFromEvent(e);
+    const factor = Math.pow(1.0018, -e.deltaY);
+    zoomAt(p.x, p.y, factor);
+  }, {passive:false});
+
+  // ---------- zoom buttons ----------
+  document.getElementById('zoomIn').addEventListener('click', ()=>zoomCenter(1.25));
+  document.getElementById('zoomOut').addEventListener('click', ()=>zoomCenter(1/1.25));
+  document.getElementById('zoomIn2').addEventListener('click', ()=>zoomCenter(1.25));
+  document.getElementById('zoomOut2').addEventListener('click', ()=>zoomCenter(1/1.25));
+  document.getElementById('zoomFit').addEventListener('click', fitView);
+  document.getElementById('zoom100').addEventListener('click', ()=>{
+    scale = 1;
+    panX = (stage.width - sourceCanvas.width)/2;
+    panY = (stage.height - sourceCanvas.height)/2;
+    scheduleRender();
+  });
+
+  // ---------- selection controls ----------
+  function clearSelection(){
+    polygon = []; currentStroke = [];
+    document.getElementById('btnCut').disabled = true;
+    document.getElementById('btnClear').disabled = true;
+    scheduleRender();
+  }
+  document.getElementById('btnClear').addEventListener('click', clearSelection);
+
+  // ---------- cut / export ----------
+  let lastCutBlob = null, lastCutName = 'cut-region.png';
+
+  document.getElementById('btnCut').addEventListener('click', ()=>{
+    if(polygon.length < 3) return;
+    const xs = polygon.map(p=>p.x), ys = polygon.map(p=>p.y);
+    let minX = Math.max(0, Math.floor(Math.min(...xs)));
+    let minY = Math.max(0, Math.floor(Math.min(...ys)));
+    let maxX = Math.min(sourceCanvas.width,  Math.ceil(Math.max(...xs)));
+    let maxY = Math.min(sourceCanvas.height, Math.ceil(Math.max(...ys)));
+    const w = Math.max(1, maxX-minX), h = Math.max(1, maxY-minY);
+
+    const out = document.createElement('canvas');
+    out.width = w; out.height = h;
+    const octx = out.getContext('2d');
+
+    const bg = document.getElementById('bgFill').value;
+    if(bg !== 'transparent'){
+      octx.fillStyle = bg;
+      octx.fillRect(0,0,w,h);
+    }
+
+    octx.save();
+    octx.beginPath();
+    polygon.forEach((pt,i)=>{
+      const x = pt.x - minX, y = pt.y - minY;
+      if(i===0) octx.moveTo(x,y); else octx.lineTo(x,y);
+    });
+    octx.closePath();
+    octx.clip();
+    octx.drawImage(sourceCanvas, -minX, -minY);
+    octx.restore();
+
+    out.toBlob(blob=>{
+      lastCutBlob = blob;
+      lastCutName = 'cut-region-' + w + 'x' + h + '.png';
+      const url = URL.createObjectURL(blob);
+      document.getElementById('resultImg').src = url;
+      document.getElementById('resultDims').textContent = 'Dimensions: ' + w + ' × ' + h + ' px (native resolution, no resampling)';
+      document.getElementById('resultBytes').textContent = 'File size: ' + formatBytes(blob.size) + ' · PNG (lossless)';
+      document.getElementById('resultPanel').style.display = 'flex';
+    }, 'image/png', 1.0);
+  });
+
+  function formatBytes(n){
+    if(n < 1024) return n + ' B';
+    if(n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/(1024*1024)).toFixed(2) + ' MB';
+  }
+
+  document.getElementById('resultClose').addEventListener('click', closeResult);
+  document.getElementById('resultDiscard').addEventListener('click', closeResult);
+  function closeResult(){
+    document.getElementById('resultPanel').style.display = 'none';
+  }
+  document.getElementById('resultDownload').addEventListener('click', ()=>{
+    if(!lastCutBlob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(lastCutBlob);
+    a.download = lastCutName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  // ---------- init ----------
+  fitStageToContainer();
+  render();
+})();
+</script>
+</body>
+</html>
