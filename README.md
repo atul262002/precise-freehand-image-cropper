@@ -48,4 +48,4 @@ Below is a preview of the app UI:
 
 ![App preview](preview.png)
 
-If you'd like, I can also add a live demo link, more screenshots, or expand the usage section with keyboard shortcuts.
+
